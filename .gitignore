@@ -1,0 +1,37 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Local companion data and secrets
+agent-workspace/
+agent-jobs.sqlite3*
+__pycache__/
+.env
+
+# Generated artifacts, local IDE state, signing keys and device recordings
+**/build/
+.kotlin/
+.idea/
+.agents/
+.codex/
+.env.*
+!.env.example
+*.apk
+*.aab
+*.jks
+*.keystore
+*.pem
+*.key
+rv101-tracking-*.zip

@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(vision LANGUAGES CXX)
+find_package(OpenCV REQUIRED COMPONENTS OpenCV::opencv_java4)
+add_library(vision SHARED vision.cpp)
+target_compile_features(vision PRIVATE cxx_std_17)
+target_compile_options(vision PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(vision PRIVATE OpenCV::opencv_java4)

@@ -1,0 +1,8 @@
+MediaPipe Hand Landmarker (float16, model revision 1)
+Downloaded from Google's official MediaPipe model distribution:
+https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
+Documentation/model card links:
+https://developers.google.com/edge/mediapipe/solutions/vision/hand_landmarker/index
+SHA-256: fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1
+Android runtime: com.google.mediapipe:tasks-vision:0.10.35
+Model is packaged uncompressed in the APK. No runtime download is required.
