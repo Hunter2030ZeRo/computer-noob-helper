@@ -36,12 +36,12 @@ class HandGestureTest {
     @Test fun swipeDirectionsAndOpenPalmHold() {
         val right = HandGestureDecoder()
         right.update(open(), 0)
-        assertNull(right.update(open(.25f), 250))
-        assertEquals(HandGesture.NEXT, right.update(open(.26f), 350))
+        assertNull(right.update(open(.10f), 150))
+        assertEquals(HandGesture.NEXT, right.update(open(.22f), 250))
         val left = HandGestureDecoder()
         left.update(open(), 0)
-        assertNull(left.update(open(-.25f), 250))
-        assertEquals(HandGesture.PREVIOUS, left.update(open(-.26f), 350))
+        assertNull(left.update(open(-.10f), 150))
+        assertEquals(HandGesture.PREVIOUS, left.update(open(-.22f), 250))
         val hold = HandGestureDecoder()
         for (time in 0L..900L step 100) assertNull(hold.update(open(), time))
         assertNull(hold.update(open(), 1000))
@@ -56,10 +56,10 @@ class HandGestureTest {
         assertNull(decoder.update(emptyList(), 900))
     }
 
-    @Test fun sparsePinchesAndOneFrameSwipesDoNotTrigger() {
+    @Test fun slowPinchWorksButOneFrameSwipesDoNotTrigger() {
         val pinchDecoder = HandGestureDecoder()
         assertNull(pinchDecoder.update(pinch(), 0))
-        assertNull(pinchDecoder.update(pinch(), 400))
+        assertEquals(HandGesture.PINCH, pinchDecoder.update(pinch(), 400))
         assertNull(pinchDecoder.update(emptyList(), 500))
         assertNull(pinchDecoder.update(pinch(), 600))
         val swipe = HandGestureDecoder()
@@ -79,4 +79,23 @@ class HandGestureTest {
         for (time in listOf(1450L, 1550L, 1650L)) assertNull(decoder.update(pinch(), time))
         assertEquals(HandGesture.PINCH, decoder.update(pinch(), 1800))
     }
+    @Test fun edgeOnHandUsesDepthAndTwoDirectionalMovements() {
+        fun edge(dx: Float) = open().map { HandPoint(.5f + (it.x - .5f) * .08f + dx, it.y, it.x - .5f) }
+        val decoder = HandGestureDecoder()
+        assertNull(decoder.update(edge(0f), 0))
+        assertNull(decoder.update(edge(.08f), 100))
+        assertEquals(HandGesture.NEXT, decoder.update(edge(.18f), 200))
+        assertNull(decoder.update(edge(.3f), 300))
+    }
+
+    @Test fun pinchAtTwoFpsAndSwipeAfterTrackingLoss() {
+        val decoder = HandGestureDecoder()
+        assertNull(decoder.update(pinch(), 0))
+        assertEquals(HandGesture.PINCH, decoder.update(pinch(), 500))
+        val swipe = HandGestureDecoder()
+        assertNull(swipe.update(open(), 0))
+        assertNull(swipe.update(open(.1f), 200))
+        assertNull(swipe.update(open(.25f), 1000))
+    }
+
 }

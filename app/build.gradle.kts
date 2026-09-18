@@ -53,6 +53,7 @@ android {
 }
 
 dependencies {
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
     implementation("com.google.mediapipe:tasks-vision:0.10.35")
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)

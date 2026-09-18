@@ -15,7 +15,8 @@ import kotlinx.coroutines.delay
 
 /** Normalized rotated camera coordinates, not the aspect-corrected gesture coordinates. */
 data class HandObservation(val points: List<ScreenPoint>, val capturedAtMs: Long,
-    val latencyMs: Long, val hint: String, val gesture: HandGesture?) {
+    val latencyMs: Long, val hint: String, val gesture: HandGesture?,
+    val conversionMs: Long = 0, val inferenceMs: Long = 0, val intervalMs: Long = 0) {
     fun fresh(now: Long) = now - capturedAtMs in 0..700
 }
 
@@ -63,6 +64,7 @@ internal fun HandOverlay(observation: HandObservation?, calibration: SpatialCali
                 current.latencyMs >= 450 -> "관절 21 · 처리 지연 ${current.latencyMs}ms"
                 else -> "관절 21 · ${current.latencyMs}ms · ${current.hint}"
             }, color = color, fontSize = 11.sp)
+            if (current != null) Text("변환 ${current.conversionMs} · 추론 ${current.inferenceMs} · 간격 ${current.intervalMs}ms", color = color, fontSize = 10.sp)
             Text(if (flash) recognized else if (calibrated) "손 위치 근사 투영" else "손 위치 임시 보정 · 설정에서 조정",
                 color = color, fontSize = 11.sp)
         }

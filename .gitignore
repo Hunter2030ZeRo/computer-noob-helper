@@ -35,3 +35,5 @@ __pycache__/
 *.pem
 *.key
 rv101-tracking-*.zip
+setup-qr.html
+.venv/

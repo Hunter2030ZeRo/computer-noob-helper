@@ -1,13 +1,11 @@
 package com.example.commaengdoughme
 
 import android.Manifest
-import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.IntentFilter
 import android.os.SystemClock
 import android.content.Intent
-import android.speech.RecognizerIntent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.hardware.camera2.CameraCharacteristics
@@ -32,13 +30,14 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.content.ContextCompat
 import com.example.commaengdoughme.ui.theme.컴맹도우미Theme
 import java.util.concurrent.Executors
@@ -63,77 +62,30 @@ private fun VisionScreen(activity: ComponentActivity) {
     var running by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("시야 연결 중") }
     var result by remember { mutableStateOf<VisionResult?>(null) }
-    var address by remember { mutableStateOf("") }
-    var token by remember { mutableStateOf("") }
-    var includeImage by remember { mutableStateOf(true) }
+    val credentials = remember { CredentialStore(activity.applicationContext) }
+    var selectedProvider by remember { mutableStateOf(credentials.selected()) }
+    val initialConfig = remember { runCatching { credentials.load(selectedProvider) } }
+    var activeConfig by remember { mutableStateOf(initialConfig.getOrNull()) }
+    var model by remember { mutableStateOf(activeConfig?.model.orEmpty()) }
+    var apiKey by remember { mutableStateOf(activeConfig?.apiKey.orEmpty()) }
+    var configStatus by remember { mutableStateOf(if (initialConfig.isFailure) "저장한 키를 복원할 수 없습니다. 다시 등록하세요" else "") }
+    var scanning by remember { mutableStateOf(false) }
+    val scanEnabled = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    var pendingConfig by remember { mutableStateOf<ProviderConfig?>(null) }
     var threshold by remember { mutableStateOf(false) }
     var interval by remember { mutableStateOf("1500") }
     var cameraConnected by remember { mutableStateOf(false) }
-    var showAdvanced by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
     var response by remember { mutableStateOf("") }
-    var goal by remember { mutableStateOf("지금 보고 있는 컴퓨터 문제를 해결해 주세요") }
-    var allowPc by remember { mutableStateOf(false) }
+    var goal by remember { mutableStateOf("현재 시야의 컴퓨터 문제를 설명하고 따라할 수 있는 해결 방법을 짧게 안내해 주세요") }
     var continuous by remember { mutableStateOf(false) }
     var hud by remember { mutableStateOf(true) }
-    var pendingId by remember { mutableStateOf<String?>(null) }
-    var pendingAddress by remember { mutableStateOf("") }
-    var pendingToken by remember { mutableStateOf("") }
     var lastSent by remember { mutableStateOf("") }
     var lastSendTime by remember { mutableLongStateOf(0L) }
     var steps by remember { mutableStateOf(listOf<String>()) }
     var stepIndex by remember { mutableIntStateOf(0) }
     val tracker = remember { HeadTracker(activity) { activity.window.decorView.display?.rotation ?: Surface.ROTATION_0 } }
-    val diagnostics = remember { TrackingDiagnostics(activity.applicationContext) }
-    var diagnosticStatus by remember { mutableStateOf(diagnostics.status()) }
-    var exporting by remember { mutableStateOf(false) }
-    var exportStatus by remember { mutableStateOf("") }
-    val exportDiagnostics = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
-        if (uri != null) {
-            exporting = true
-            network.execute {
-                val message = runCatching {
-                    activity.contentResolver.openOutputStream(uri)?.use { diagnostics.export(it) }
-                        ?: error("출력 파일을 열 수 없습니다")
-                    "진단 ZIP 저장 완료"
-                }.getOrElse { "진단 저장 실패: ${it.javaClass.simpleName}" }
-                mainExecutor.execute { if (!disposed) { exporting = false; exportStatus = message } }
-            }
-        }
-    }
-    LaunchedEffect(diagnostics) {
-        while (true) { diagnosticStatus = diagnostics.status(); delay(500) }
-    }
-    var spatial by remember { mutableStateOf(true) }
-    var calibrated by remember { mutableStateOf(false) }
-    var calibration by remember { mutableStateOf(SpatialCalibration()) }
-    var calibrationFields by remember { mutableStateOf(listOf("30", "22", "60", "45", "0", "0")) }
-    var calibrationError by remember { mutableStateOf("") }
-    var pendingPose by remember { mutableStateOf<HeadPose?>(null) }
-    var pendingCalibration by remember { mutableStateOf(SpatialCalibration()) }
-    var focus by remember { mutableStateOf(listOf<SpatialAnchor>()) }
-    var gesturesEnabled by remember { mutableStateOf(true) }
-    var handObservation by remember { mutableStateOf<HandObservation?>(null) }
-    var showHandOverlay by remember { mutableStateOf(true) }
-    var handPreview by remember { mutableStateOf(false) }
-    var handPreviewBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
-    var handPreviewDetail by remember { mutableStateOf("카메라 영상 대기") }
-    val previewAllowed = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
-    var gestureStatus by remember { mutableStateOf("손 대기") }
-    var gestureEvent by remember { mutableStateOf<GestureEvent?>(null) }
-    var gestureSequence by remember { mutableLongStateOf(0) }
     var recenterEpoch by remember { mutableLongStateOf(0) }
-    var wearing by remember { mutableStateOf(true) }
-    var foreground by remember { mutableStateOf(activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
-    val handInputAllowed = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
-    val handInputSession = remember { java.util.concurrent.atomic.AtomicLong(0) }
-    DisposableEffect(hud, gesturesEnabled, wearing, foreground, handPreview) {
-        handObservation = null
-        handInputSession.incrementAndGet()
-        handInputAllowed.set((hud && gesturesEnabled || !hud && handPreview) && wearing && foreground)
-        previewAllowed.set(!hud && handPreview && wearing && foreground)
-        onDispose { handInputAllowed.set(false); previewAllowed.set(false); handInputSession.incrementAndGet() }
-    }
     DisposableEffect(activity) {
         var registered = false
         val receiver = object : BroadcastReceiver() {
@@ -144,8 +96,8 @@ private fun VisionScreen(activity: ComponentActivity) {
                     else -> null
                 }
                 when (state) {
-                    "0" -> { handInputAllowed.set(false); handInputSession.incrementAndGet(); gestureEvent = null; wearing = false; continuous = false; focus = emptyList(); pendingPose = null }
-                    "1" -> { handInputSession.incrementAndGet(); gestureEvent = null; wearing = true; recenterEpoch++; focus = emptyList(); pendingPose = null }
+                    "0" -> { continuous = false; result = null }
+                    "1" -> { recenterEpoch++; result = null }
                 }
             }
         }
@@ -166,7 +118,7 @@ private fun VisionScreen(activity: ComponentActivity) {
         if (activity.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) register()
         onDispose { activity.lifecycle.removeObserver(observer); if (registered) activity.unregisterReceiver(receiver) }
     }
-    DisposableEffect(hud, spatial) {
+    DisposableEffect(hud) {
         val view = activity.window.decorView
         val insets = WindowCompat.getInsetsController(activity.window, view)
         val previousBehavior = insets.systemBarsBehavior
@@ -186,108 +138,35 @@ private fun VisionScreen(activity: ComponentActivity) {
     }
     DisposableEffect(activity, tracker) {
         val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_RESUME -> { tracker.start(); foreground = true; recenterEpoch++ }
-                Lifecycle.Event.ON_PAUSE -> { diagnostics.stop("앱 일시 정지"); tracker.stop(); foreground = false; handInputAllowed.set(false) }
-                else -> Unit
-            }
+            if (event == Lifecycle.Event.ON_PAUSE) { continuous = false; result = null; if (scanning) running = false; scanning = false; scanEnabled.set(false) }
+            if (event == Lifecycle.Event.ON_RESUME) recenterEpoch++
         }
         activity.lifecycle.addObserver(observer)
-        if (activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) tracker.start()
-        onDispose { activity.lifecycle.removeObserver(observer); tracker.stop(); diagnostics.stop("앱 종료") }
+        onDispose { activity.lifecycle.removeObserver(observer); tracker.stop() }
     }
 
-    fun acceptReply(raw: String) {
-        val json = runCatching { JSONObject(raw) }.getOrNull()
-        val state = json?.optString("status")
-        if (state == "queued" || state == "running") {
-            val id = json.optString("request_id")
-            if (!id.matches(Regex("[a-zA-Z0-9-]{1,64}"))) {
-                pendingId = null
-                continuous = false
-                response = "서버의 요청 ID가 올바르지 않습니다"
-                return
-            }
-            pendingId = id
-            response = "에이전트가 분석 중입니다…"
-        } else {
-            pendingId = null
-            response = json?.optString("advice", raw) ?: raw
-            val array = json?.optJSONArray("steps")
-            steps = if (array == null) emptyList() else (0 until array.length()).map { array.optString(it) }
-            stepIndex = 0
-            val capturedPose = pendingPose
-            val regions = json?.optJSONArray("focus_regions")
-            focus = if (state == "completed" && calibrated && pendingCalibration == calibration && capturedPose != null && regions != null) {
-                (0 until minOf(regions.length(), 4)).mapNotNull { index ->
-                    val item = regions.optJSONObject(index) ?: return@mapNotNull null
-                    val box = item.optJSONArray("box") ?: return@mapNotNull null
-                    if (box.length() != 4) return@mapNotNull null
-                    val region = FocusRegion(item.optString("label").take(80), box.optDouble(0), box.optDouble(1), box.optDouble(2), box.optDouble(3))
-                    if (region.valid()) SpatialMath.anchor(region, capturedPose, pendingCalibration, true) else null
-                }
-            } else emptyList()
-            if (state == "failed") continuous = false
-        }
-    }
-    fun submit(spoken: String? = null) {
-        val frame = result
-        if (frame == null && spoken == null) return
-        val snapshot = frame?.copy(id = java.util.UUID.randomUUID().toString()) ?: VisionResult(
-            java.util.UUID.randomUUID().toString(), "", System.currentTimeMillis(), 0, 0, byteArrayOf()
-        )
-        if (sending || pendingId != null) return
-        val destination = address
-        val credential = token
-        val attach = includeImage && frame != null
-        val task = spoken ?: goal
-        val pc = allowPc
+    fun saveConfig(config: ProviderConfig) {
         try {
-            AgentClient.endpoint(destination)
-            sending = true
-            lastSent = frame?.id.orEmpty()
-            lastSendTime = System.currentTimeMillis()
-            pendingAddress = destination
-            pendingToken = credential
-            steps = emptyList()
-            focus = emptyList()
-            pendingPose = if (attach && calibrated) snapshot.headPose else null
-            pendingCalibration = calibration
-            response = "전송 중"
-            network.execute {
-                val reply = runCatching { AgentClient.send(destination, credential, snapshot, attach, task, pc) }
-                mainExecutor.execute {
-                    if (!disposed) {
-                        sending = false
-                        reply.onSuccess { acceptReply(it) }.onFailure {
-                            continuous = false
-                            // Retry the same snapshot ID: the server deduplicates accepted jobs.
-                            pendingId = snapshot.id
-                            response = "접수 확인 실패. 결과 조회를 시도합니다."
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) { continuous = false; response = e.message ?: "주소를 확인하세요" }
+            credentials.save(config)
+            selectedProvider = config.provider; activeConfig = config; model = config.model; apiKey = config.apiKey
+            continuous = false
+            configStatus = "${config.provider.label} 설정 저장됨 · 키는 기기에 암호화해 보관합니다"
+        } catch (_: Exception) { configStatus = "설정을 안전하게 저장하지 못했습니다. 기기 보안 저장소를 확인하세요" }
     }
-    LaunchedEffect(pendingId) {
-        val id = pendingId ?: return@LaunchedEffect
-        while (pendingId == id) {
-            delay(2000)
-            if (sending || !activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) continue
-            sending = true
-            val destination = pendingAddress
-            val credential = pendingToken
-            network.execute {
-                val reply = runCatching { AgentClient.poll(destination, credential, id) }
-                mainExecutor.execute {
-                    if (!disposed) {
-                        sending = false
-                        reply.onSuccess { if (pendingId == id) acceptReply(it) }.onFailure {
-                            continuous = false
-                            response = "결과 조회 실패. 연결을 확인하세요. 작업은 PC에서 계속될 수 있습니다."
-                        }
-                    }
+    fun submit() {
+        val frame = result ?: return
+        val config = activeConfig ?: return
+        if (!running || scanning || sending || System.currentTimeMillis() - frame.capturedAtMs !in 0..10000) return
+        sending = true; lastSent = frame.id; lastSendTime = System.currentTimeMillis()
+        steps = emptyList(); response = "${config.provider.label} 분석 중"
+        val requestGoal = goal
+        network.execute {
+            val reply = runCatching { DirectVisionClient.send(config, frame, requestGoal) }
+            mainExecutor.execute {
+                if (!disposed) {
+                    sending = false
+                    reply.onSuccess { steps = it; stepIndex = 0; response = it.firstOrNull().orEmpty() }
+                        .onFailure { continuous = false; response = if (it is IllegalStateException) it.message ?: "모델 요청 실패" else "모델 연결 실패 · 네트워크와 API 설정을 확인하세요" }
                 }
             }
         }
@@ -312,39 +191,10 @@ private fun VisionScreen(activity: ComponentActivity) {
         } else permission.launch(Manifest.permission.CAMERA)
     }
     LaunchedEffect(Unit) { connectCamera() }
-    BackHandler(enabled = !hud) { hud = true }
-    val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { reply ->
-        if (reply.resultCode == Activity.RESULT_OK) {
-            val spoken = reply.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull().orEmpty()
-            if (spoken.isNotBlank()) {
-                goal = spoken
-                submit(spoken)
-                hud = true
-            } else {
-                steps = emptyList()
-                response = "음성을 인식하지 못했습니다. 다시 말씀해 주세요."
-            }
-        }
-    }
-    fun listen() {
-        // Keep background submissions from overtaking the spoken request.
-        continuous = false
-        try {
-            voice.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR")
-                putExtra(RecognizerIntent.EXTRA_PROMPT, "궁금한 점이나 원하는 작업을 자유롭게 말씀해 주세요")
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            })
-        } catch (_: android.content.ActivityNotFoundException) {
-            steps = emptyList()
-            response = "음성 인식 서비스가 없습니다. 기기에 음성 인식 앱을 설치하거나 버튼을 사용하세요."
-        } catch (_: SecurityException) {
-            response = "음성 인식 서비스의 마이크 권한을 확인하세요."
-        }
-    }
+    BackHandler(enabled = !hud) { if (scanning) running = false; scanning = false; scanEnabled.set(false); result = null; hud = true }
     DisposableEffect(Unit) {
         onDispose {
+            scanEnabled.set(false)
             disposed = true
             network.shutdown() // Already submitted sends finish with bounded network timeouts.
         }
@@ -379,22 +229,17 @@ private fun VisionScreen(activity: ComponentActivity) {
                                 candidates.filter { Camera2CameraInfo.from(it).cameraId == selected }
                             }.build()
                             val rotation = activity.window.decorView.display?.rotation ?: Surface.ROTATION_0
-                            val realtime = cameraInfo.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ==
-                                CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
-                            val forwardCamera = cameraInfo.getCameraCharacteristic(CameraCharacteristics.LENS_FACING) != CameraCharacteristics.LENS_FACING_FRONT
-                            val handTracker = HandTracker(activity.applicationContext, mainExecutor,
-                                enabled = { handInputAllowed.get() }, session = { handInputSession.get() },
-                                onGesture = { gesture -> if (hud) gestureEvent = GestureEvent(++gestureSequence, gesture, SystemClock.uptimeMillis()) },
-                                onStatus = { gestureStatus = it },
-                                previewEnabled = { previewAllowed.get() },
-                                onPreview = { bitmap, detail -> handPreviewBitmap = bitmap; handPreviewDetail = detail },
-                                onObservation = { handObservation = it })
                             val worker = VisionAnalyzer(threshold, interval.toLongOrNull()?.coerceIn(250L, 60000L) ?: 1500L, mainExecutor,
-                                onResult = { result = it; status = "시야 인식 중"; cameraConnected = true },
+                                onResult = { if (running && !scanning) { result = it; status = "시야 인식 중"; cameraConnected = true } },
                                 onError = { status = it; cameraConnected = false },
-                                poseAt = { timestamp -> if (realtime && forwardCamera && tracker.displayMatches(rotation)) tracker.at(timestamp) else null },
-                                hands = handTracker,
-                                diagnostics = diagnostics,
+                                setupScan = { scanEnabled.get() },
+                                onSetup = { raw ->
+                                    runCatching { ProviderConfig.parse(raw) }.onSuccess {
+                                        scanEnabled.set(false); scanning = false; running = false; result = null; continuous = false
+                                        pendingConfig = it
+                                        status = "설정 QR을 화면에서 치운 뒤 카메라를 다시 연결하세요"
+                                    }.onFailure { configStatus = "지원하는 설정 QR이 아닙니다. 로컬 설정 도구로 생성하세요" }
+                                },
                             )
                             val useCase = ImageAnalysis.Builder()
                                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -408,7 +253,6 @@ private fun VisionScreen(activity: ComponentActivity) {
                             try {
                                 // Analysis works without any Preview surface: optical HUD keeps the real view clear.
                                 cameras.bindToLifecycle(activity, selector, useCase)
-                                diagnostics.cameraInfo(selected, realtime)
                                 analyzer = worker
                                 analysis = useCase
                                 status = "시야 연결됨 · 첫 프레임 대기"
@@ -431,7 +275,6 @@ private fun VisionScreen(activity: ComponentActivity) {
         }
         onDispose {
             cancelled = true
-            diagnostics.stop("카메라 중지")
             cameraConnected = false
             analysis?.clearAnalyzer()
             analysis?.let { provider?.unbind(it) }
@@ -440,29 +283,25 @@ private fun VisionScreen(activity: ComponentActivity) {
     }
     if (hud) {
         SpatialHud(
-            tracker = tracker,
+            tracker = tracker, mvp = true,
             text = if (steps.isEmpty()) response.ifBlank {
-                if (address.isBlank()) "메뉴에서 에이전트를 연결하세요.\n시야는 기기 안에서 인식합니다."
-                else "보고 있는 문제를 말씀해 주세요."
+                if (activeConfig == null) "메뉴에서 Provider와 API 키를 등록하세요.\n설정 QR로 입력할 수 있습니다."
+                else "시야 보내기를 눌러 현재 화면의 조언을 받으세요."
             } else steps[stepIndex],
-            focus = focus, calibration = calibration, calibrated = calibrated, spatialEnabled = spatial,
+            focus = emptyList(), calibration = SpatialCalibration(), calibrated = false, spatialEnabled = false,
             cameraReady = cameraConnected, cameraRequested = running, cameraStatus = status,
-            agentBusy = sending || pendingId != null, agentConfigured = address.isNotBlank(),
-            canSpeak = !sending && pendingId == null, stepIndex = stepIndex, stepCount = steps.size,
+            agentBusy = sending, agentConfigured = activeConfig != null,
+            canSpeak = running && cameraConnected && result != null && activeConfig != null && !sending, stepIndex = stepIndex, stepCount = steps.size,
             continuous = continuous,
-            gestureEvent = gestureEvent, gestureStatus = if (gesturesEnabled) gestureStatus else "손 조작 꺼짐",
             recenterEpoch = recenterEpoch,
-            handObservation = handObservation,
-            showHandOverlay = showHandOverlay && gesturesEnabled && wearing && foreground && running,
-            onRecovered = { focus = emptyList(); pendingPose = null },
-            onSpeak = { listen() }, onPrevious = { if (stepIndex > 0) stepIndex-- },
+            onSpeak = { submit() }, onPrevious = { if (stepIndex > 0) stepIndex-- },
             onNext = { if (stepIndex < steps.lastIndex) stepIndex++ },
-            onSettings = { hud = false },
+            onSettings = { continuous = false; hud = false },
             onCameraToggle = {
                 if (running) { continuous = false; running = false; status = "시야 일시 정지" }
                 else connectCamera()
             },
-            onShare = { if (continuous) continuous = false else if (running && address.isNotBlank()) continuous = true },
+            onShare = { if (continuous) continuous = false else if (running && activeConfig != null) continuous = true },
         )
         return
     }
@@ -471,87 +310,56 @@ private fun VisionScreen(activity: ComponentActivity) {
     Scaffold { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = settingsInsetX, vertical = settingsInsetY).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = { hud = true }) { Text("‹ HUD로 돌아가기") }
-            Text("에이전트 연결", style = MaterialTheme.typography.titleLarge)
-            Row { Checkbox(gesturesEnabled, { gesturesEnabled = it }); Text("손 제스처 조작") }
-            Text("핀치 0.35초 유지: 메뉴/선택 · 펼친 손 좌우 이동: 이동 · 리셋 버튼: 정면 재설정")
-            Row { Checkbox(showHandOverlay, { showHandOverlay = it }); Text("HUD 손 관절 오버레이") }
-            Text("녹색 관절: 손 검출 · 흰색 점멸: 제스처 판정. 실제 손과의 정렬은 고급 설정의 카메라/화면 시야각과 오프셋을 조정하세요. 가까운 손은 시차가 남습니다.")
-            Row { Checkbox(handPreview, { handPreview = it; if (!it) handPreviewBitmap = null }); Text("손 인식 진단 화면") }
-            if (handPreview) {
-                Text("실제 추론 영상·관절을 표시합니다. 이 화면에서는 손 동작으로 명령을 실행하지 않습니다.")
-                Text("$gestureStatus · $handPreviewDetail")
-                handPreviewBitmap?.let { androidx.compose.foundation.Image(it.asImageBitmap(), "손 인식 카메라와 관절", Modifier.fillMaxWidth().heightIn(max = 180.dp)) }
+            TextButton(onClick = { if (scanning) running = false; scanning = false; scanEnabled.set(false); result = null; hud = true }) { Text("‹ HUD로 돌아가기") }
+            Text("Provider 설정", style = MaterialTheme.typography.titleLarge)
+            Text("현재 시야의 이미지와 읽은 글자를 LLM에 전달하고, 조언을 HUD에 표시합니다.")
+            Text("PC 중계 없이 선택한 Provider로 직접 전송합니다.")
+            ModelProvider.entries.forEach { provider ->
+                TextButton(enabled = !sending && !scanning, onClick = {
+                    selectedProvider = provider; continuous = false
+                    val loaded = runCatching { credentials.load(provider) }
+                    activeConfig = loaded.getOrNull(); model = activeConfig?.model.orEmpty(); apiKey = activeConfig?.apiKey.orEmpty()
+                    configStatus = if (loaded.isFailure) "저장된 키 복원 실패 · 다시 등록하세요" else ""
+                    runCatching { credentials.select(provider) }
+                }) { Text("${if (selectedProvider == provider) "●" else "○"} ${provider.label}") }
             }
-            Text("카메라는 자동으로 연결됩니다. 이 화면은 최초 연결 및 보정용입니다.")
-            OutlinedTextField(address, { address = it }, label = { Text("에이전트 HTTPS URL") },
-                singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(token, { token = it }, label = { Text("Bearer 토큰 (선택 · 저장하지 않음)") },
-                visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth())
-            Row { Checkbox(includeImage, { includeImage = it }); Text("OCR에 사용한 흑백 이미지도 전송") }
+            Button(enabled = !sending, onClick = {
+                continuous = false; result = null
+                if (scanning) { scanEnabled.set(false); scanning = false; running = false }
+                else { scanning = true; scanEnabled.set(true); configStatus = "로컬에서 만든 설정 QR을 카메라에 보여주세요"; connectCamera() }
+            }) { Text(if (scanning) "QR 읽기 중지" else "설정 QR 읽기") }
+            if (scanning) Text("키가 포함된 QR입니다. 읽기가 끝나면 QR 화면을 치우세요. 스캔 중 시야는 모델에 전송되지 않습니다.")
+            if (configStatus.isNotBlank()) Text(configStatus)
+            OutlinedTextField(model, { model = it }, label = { Text("이미지 입력 지원 모델 ID") },
+                enabled = !sending && !scanning, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(apiKey, { apiKey = it }, label = { Text("API 키 (직접 입력 또는 QR)") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
+                enabled = !sending && !scanning, visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth())
+            Button(enabled = !sending && !scanning, onClick = {
+                runCatching { ProviderConfig(selectedProvider, model.trim(), apiKey.trim()) }
+                    .onSuccess { saveConfig(it) }.onFailure { configStatus = "모델 ID와 API 키 형식을 확인하세요" }
+            }) { Text("Provider 설정 저장") }
+            TextButton(enabled = !sending && !scanning, onClick = {
+                runCatching { credentials.delete(selectedProvider) }.onSuccess {
+                    activeConfig = null; apiKey = ""; continuous = false; configStatus = "이 Provider의 키를 삭제했습니다"
+                }.onFailure { configStatus = "키 삭제 실패" }
+            }) { Text("저장한 키 삭제") }
             OutlinedTextField(goal, { goal = it }, label = { Text("해결할 문제 / 요청") },
                 modifier = Modifier.fillMaxWidth())
-            Row { Checkbox(allowPc, { allowPc = it }); Text("PC 도구 허용 (서버에서 허용한 작업만)") }
-            Row { Checkbox(continuous, { continuous = it }, enabled = running); Text("시야 연속 전송 (최소 10초 간격)") }
-            Text("말하기를 마치면 인식된 문장과 마지막 시야가 모델에 바로 전송됩니다. 시야가 없으면 음성 인식 문장만 전송합니다.")
-            Button(enabled = result != null && !sending && pendingId == null, onClick = { submit() }) {
-                Text(if (sending || pendingId != null) "에이전트 처리 중…" else "현재 시야로 도움 요청")
+            Text("이미지가 함께 전송됩니다. 메뉴에서 시야 공유를 켜면 최소 10초 간격으로 새 시야를 보냅니다. 앱을 벗어나면 공유가 중지됩니다.")
+            Button(enabled = result != null && running && activeConfig != null && !scanning && !sending, onClick = { submit() }) {
+                Text(if (sending) "에이전트 처리 중…" else "현재 시야로 도움 요청")
             }
-            TextButton(onClick = { showAdvanced = !showAdvanced }) { Text(if (showAdvanced) "고급 설정 닫기" else "고급 설정 · 화면 보정") }
-            if (showAdvanced) {
-                Text(status)
-                Text(gestureStatus)
-                Text(tracker.trackingMode)
-                Text(diagnosticStatus)
-                Text("진단은 15초 동안 카메라 영상과 원시 IMU를 기기에 기록합니다. 기록 중 OCR·손 인식·연속 전송은 쉽니다. VIO 보정용 완성 데이터가 아닙니다.")
-                Button(enabled = running && !exporting, onClick = {
-                    if (diagnostics.recording) diagnostics.stop() else {
-                        continuous = false; result = null; focus = emptyList(); pendingPose = null
-                        diagnostics.start()
-                    }
-                    diagnosticStatus = diagnostics.status()
-                }) { Text(if (diagnostics.recording) "진단 기록 중지" else "15초 입력 진단") }
-                Button(enabled = !diagnostics.recording && diagnostics.hasData() && !exporting, onClick = {
-                    try { exportDiagnostics.launch("rv101-tracking-${System.currentTimeMillis()}.zip") }
-                    catch (_: android.content.ActivityNotFoundException) { exportStatus = "이 기기에 파일 저장 앱이 없습니다" }
-                }) { Text(if (exporting) "저장 중…" else "진단 ZIP 저장") }
-                if (exportStatus.isNotBlank()) Text(exportStatus)
-                OutlinedTextField(interval, { interval = it }, label = { Text("인식 간격 (250–60000 ms)") },
-                    enabled = !running, singleLine = true, modifier = Modifier.fillMaxWidth())
-                Row { Checkbox(threshold, { threshold = it }, enabled = !running); Text("문서 이진화") }
-                TextButton(onClick = { if (running) { running = false; continuous = false } else connectCamera() }) {
-                    Text(if (running) "카메라 일시 정지" else "카메라 자동 연결")
-                }
-                Row { Checkbox(spatial, { spatial = it }); Text("앱 내 3DoF 안내 화면") }
-                Text("센서: ${tracker.sensorName} · 회전만 보정합니다. 이동/물체 추적은 지원하지 않습니다.")
-                Text("시야각 보정 (기본값은 예시이며 RV101 실측값이 아닙니다)")
-                val calibrationLabels = listOf("디스플레이 가로 FOV", "디스플레이 세로 FOV", "회전 보정된 카메라 가로 FOV", "회전 보정된 카메라 세로 FOV", "카메라 yaw 오프셋", "카메라 pitch 오프셋")
-                calibrationLabels.forEachIndexed { index, label ->
-                    OutlinedTextField(calibrationFields[index], { value ->
-                        calibrationFields = calibrationFields.toMutableList().also { it[index] = value }
-                        calibrated = false
-                        focus = emptyList()
-                    }, label = { Text("$label (도)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                }
-                Button(onClick = {
-                    val values = calibrationFields.map { it.toDoubleOrNull() }
-                    val candidate = if (values.all { it != null }) SpatialCalibration(values[0]!!, values[1]!!, values[2]!!, values[3]!!, values[4]!!, values[5]!!) else null
-                    if (candidate != null && candidate.valid()) {
-                        calibration = candidate
-                        calibrated = true
-                        focus = emptyList()
-                        calibrationError = "보정 적용됨 · 새 시야를 전송하면 관심 영역을 표시합니다"
-                    } else calibrationError = "FOV는 5–150도, 오프셋은 -90–90도로 입력하세요"
-                }) { Text("실측 보정값 적용") }
-                if (calibrationError.isNotBlank()) Text(calibrationError)
-                Text("관심 영역은 이미지 첨부·보정 적용·촬영 시각과 동기화된 자세가 모두 있어야 표시됩니다.")
-                Text(if (result?.headPose != null) "마지막 프레임: 촬영 자세 동기화됨" else "마지막 프레임: 촬영 자세 없음 (관심 영역 표시 불가)")
-            }
-            Button(onClick = { hud = true }) { Text("HUD로 돌아가기") }
-            if (pendingId != null) TextButton(onClick = { pendingId = null; continuous = false }) {
-                Text("결과 조회 중단 (PC 작업은 취소되지 않음)")
-            }
+            Button(onClick = { if (scanning) running = false; scanEnabled.set(false); scanning = false; result = null; hud = true }) { Text("HUD로 돌아가기") }
             if (response.isNotBlank()) Text(response)
         }
     }
+    pendingConfig?.let { config ->
+        AlertDialog(onDismissRequest = { pendingConfig = null },
+            title = { Text("Provider 설정 가져오기") },
+            text = { Text("${config.provider.label}\n모델: ${config.model}\nAPI 키 포함 (내용은 표시하지 않음)\nQR 화면을 치운 뒤 카메라를 다시 연결하세요.") },
+            confirmButton = { TextButton(onClick = { saveConfig(config); pendingConfig = null }) { Text("암호화 저장") } },
+            dismissButton = { TextButton(onClick = { pendingConfig = null }) { Text("취소") } })
+    }
+
 }
