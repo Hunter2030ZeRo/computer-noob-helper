@@ -59,6 +59,7 @@ private fun VisionScreen(activity: ComponentActivity) {
     val mainExecutor = remember { ContextCompat.getMainExecutor(activity) }
     val network = remember { Executors.newSingleThreadExecutor() }
     var disposed by remember { mutableStateOf(false) }
+    val requestAllowed = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     var running by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("시야 연결 중") }
     var result by remember { mutableStateOf<VisionResult?>(null) }
@@ -72,6 +73,7 @@ private fun VisionScreen(activity: ComponentActivity) {
     var scanning by remember { mutableStateOf(false) }
     val scanEnabled = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     var pendingConfig by remember { mutableStateOf<ProviderConfig?>(null) }
+    var buttonDiagnostic by remember { mutableStateOf("촬영 버튼: 아직 신호 없음") }
     var threshold by remember { mutableStateOf(false) }
     var interval by remember { mutableStateOf("1500") }
     var cameraConnected by remember { mutableStateOf(false) }
@@ -138,7 +140,7 @@ private fun VisionScreen(activity: ComponentActivity) {
     }
     DisposableEffect(activity, tracker) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE) { continuous = false; result = null; if (scanning) running = false; scanning = false; scanEnabled.set(false) }
+            if (event == Lifecycle.Event.ON_PAUSE) { requestAllowed.set(false); continuous = false; result = null; if (scanning) running = false; scanning = false; scanEnabled.set(false) }
             if (event == Lifecycle.Event.ON_RESUME) recenterEpoch++
         }
         activity.lifecycle.addObserver(observer)
@@ -150,7 +152,7 @@ private fun VisionScreen(activity: ComponentActivity) {
             credentials.save(config)
             selectedProvider = config.provider; activeConfig = config; model = config.model; apiKey = config.apiKey
             continuous = false
-            configStatus = "${config.provider.label} 설정 저장됨 · 키는 기기에 암호화해 보관합니다"
+            configStatus = "${config.provider.label} 설정 저장됨 · 연결은 아직 확인하지 않았습니다. 시야 보내기로 확인하세요"
         } catch (_: Exception) { configStatus = "설정을 안전하게 저장하지 못했습니다. 기기 보안 저장소를 확인하세요" }
     }
     fun submit() {
@@ -160,8 +162,13 @@ private fun VisionScreen(activity: ComponentActivity) {
         sending = true; lastSent = frame.id; lastSendTime = System.currentTimeMillis()
         steps = emptyList(); response = "${config.provider.label} 분석 중"
         val requestGoal = goal
+        requestAllowed.set(true)
         network.execute {
-            val reply = runCatching { DirectVisionClient.send(config, frame, requestGoal) }
+            val reply = runCatching { DirectVisionClient.send(config, frame, requestGoal,
+                allowed = { requestAllowed.get() },
+                progress = { message -> mainExecutor.execute {
+                    if (!disposed && requestAllowed.get()) response = "${config.provider.label} / ${config.model}\n$message"
+                } }) }
             mainExecutor.execute {
                 if (!disposed) {
                     sending = false
@@ -170,6 +177,75 @@ private fun VisionScreen(activity: ComponentActivity) {
                 }
             }
         }
+    }
+    val shutterAction by rememberUpdatedState(newValue = { ordered: Boolean ->
+        when {
+            !ordered -> {
+                configStatus = "촬영 버튼 신호 수신 · 이 펌웨어의 기본 촬영 동작은 차단할 수 없습니다"
+                if (hud) response = configStatus
+            }
+            !hud || scanning || pendingConfig != null || !activity.hasWindowFocus() -> {
+                configStatus = "촬영 버튼 수신 · 설정·메뉴를 닫고 HUD에서 사용하세요"
+            }
+            sending -> Unit
+            activeConfig == null -> response = "촬영 버튼 수신 · 먼저 Provider 설정을 등록하세요"
+            !running || result == null || System.currentTimeMillis() - (result?.capturedAtMs ?: 0L) !in 0..10000 ->
+                response = "촬영 버튼 수신 · 카메라를 연결하고 새 시야를 기다려주세요"
+            else -> submit()
+        }
+    })
+    DisposableEffect(activity) {
+        // Official Glass3 CLICK broadcast. Never change global button settings.
+        var registered = false
+        var lastClick = -1000L
+        val signals = linkedMapOf("CLICK" to 0, "DOWN" to 0, "UP" to 0)
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (!activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
+                val signal = when (intent?.action) {
+                    "com.rokid.glass3.action.button.CLICK" -> "CLICK"
+                    "com.android.action.ACTION_SPRITE_BUTTON_DOWN" -> "DOWN"
+                    "com.android.action.ACTION_SPRITE_BUTTON_UP" -> "UP"
+                    else -> return
+                }
+                signals[signal] = signals.getValue(signal) + 1
+                buttonDiagnostic = "촬영 버튼: " + signals.entries.joinToString(" · ") { "${it.key} ${it.value}" } +
+                    "\n최근 $signal: " + if (isOrderedBroadcast) "순서 있는 신호" else "차단 불가 신호"
+                // DOWN/UP are diagnostic only: they must not trigger duplicate sends or intercept long presses.
+                if (signal != "CLICK") return
+                val ordered = isOrderedBroadcast
+                if (ordered) abortBroadcast()
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastClick < 500L) return
+                lastClick = now
+                shutterAction(ordered)
+            }
+        }
+        fun register() {
+            if (!registered) {
+                ContextCompat.registerReceiver(activity, receiver,
+                    IntentFilter("com.rokid.glass3.action.button.CLICK").apply {
+                        addAction("com.android.action.ACTION_SPRITE_BUTTON_DOWN")
+                        addAction("com.android.action.ACTION_SPRITE_BUTTON_UP")
+                        priority = 100
+                    },
+                    ContextCompat.RECEIVER_EXPORTED)
+                registered = true
+            }
+        }
+        fun unregister() {
+            if (registered) { activity.unregisterReceiver(receiver); registered = false }
+        }
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> register()
+                Lifecycle.Event.ON_PAUSE -> unregister()
+                else -> Unit
+            }
+        }
+        activity.lifecycle.addObserver(observer)
+        if (activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) register()
+        onDispose { activity.lifecycle.removeObserver(observer); unregister() }
     }
     LaunchedEffect(continuous, running) {
         while (continuous && running) {
@@ -196,6 +272,7 @@ private fun VisionScreen(activity: ComponentActivity) {
         onDispose {
             scanEnabled.set(false)
             disposed = true
+            requestAllowed.set(false)
             network.shutdown() // Already submitted sends finish with bounded network timeouts.
         }
     }
@@ -305,21 +382,26 @@ private fun VisionScreen(activity: ComponentActivity) {
         )
         return
     }
-    val settingsInsetX = LocalConfiguration.current.screenWidthDp.dp * .10f
+    val settingsInsetX = LocalConfiguration.current.screenWidthDp.dp * .08f
     val settingsInsetY = LocalConfiguration.current.screenHeightDp.dp * .08f
     Scaffold { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = settingsInsetX, vertical = settingsInsetY).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = { if (scanning) running = false; scanning = false; scanEnabled.set(false); result = null; hud = true }) { Text("‹ HUD로 돌아가기") }
             Text("Provider 설정", style = MaterialTheme.typography.titleLarge)
+            Text(buttonDiagnostic)
             Text("현재 시야의 이미지와 읽은 글자를 LLM에 전달하고, 조언을 HUD에 표시합니다.")
             Text("PC 중계 없이 선택한 Provider로 직접 전송합니다.")
             ModelProvider.entries.forEach { provider ->
                 TextButton(enabled = !sending && !scanning, onClick = {
                     selectedProvider = provider; continuous = false
                     val loaded = runCatching { credentials.load(provider) }
-                    activeConfig = loaded.getOrNull(); model = activeConfig?.model.orEmpty(); apiKey = activeConfig?.apiKey.orEmpty()
-                    configStatus = if (loaded.isFailure) "저장된 키 복원 실패 · 다시 등록하세요" else ""
+                    activeConfig = loaded.getOrNull(); model = activeConfig?.model ?: if (provider == ModelProvider.OPENROUTER) "google/gemma-4-26b-a4b-it:free" else ""; apiKey = activeConfig?.apiKey.orEmpty()
+                    configStatus = when {
+                        loaded.isFailure -> "저장된 키 복원 실패 · 다시 등록하세요"
+                        activeConfig == null -> "${provider.label} 선택됨 · 이 Provider의 키와 모델을 등록하세요"
+                        else -> "${provider.label} / ${activeConfig?.model} 선택됨 · 시야 보내기로 연결을 확인하세요"
+                    }
                     runCatching { credentials.select(provider) }
                 }) { Text("${if (selectedProvider == provider) "●" else "○"} ${provider.label}") }
             }
@@ -329,6 +411,7 @@ private fun VisionScreen(activity: ComponentActivity) {
                 else { scanning = true; scanEnabled.set(true); configStatus = "로컬에서 만든 설정 QR을 카메라에 보여주세요"; connectCamera() }
             }) { Text(if (scanning) "QR 읽기 중지" else "설정 QR 읽기") }
             if (scanning) Text("키가 포함된 QR입니다. 읽기가 끝나면 QR 화면을 치우세요. 스캔 중 시야는 모델에 전송되지 않습니다.")
+            if (selectedProvider == ModelProvider.OPENROUTER) Text("OpenRouter API 키가 필요합니다. 무료 모델만 사용하며, 시야는 OpenRouter와 해당 모델 제공자에게 전달됩니다.")
             if (configStatus.isNotBlank()) Text(configStatus)
             OutlinedTextField(model, { model = it }, label = { Text("이미지 입력 지원 모델 ID") },
                 enabled = !sending && !scanning, singleLine = true, modifier = Modifier.fillMaxWidth())

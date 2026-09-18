@@ -6,6 +6,14 @@ from make_setup_qr import payload, create_document
 
 
 class SetupQrTest(unittest.TestCase):
+    def test_openrouter_free_models_only(self):
+        key = 'dummy-test-key-not-a-real-secret'
+        for model in ('google/gemma-4-26b-a4b-it:free', 'openrouter/free'):
+            self.assertEqual(json.loads(payload('openrouter', model, key))['model'], model)
+        for model in ('google/paid-model', '../model:free', 'google/model:free?x=1'):
+            with self.assertRaises(ValueError):
+                payload('openrouter', model, key)
+
     def test_payload_matches_app_contract(self):
         key = 'dummy-test-key-not-a-real-secret'
         for provider in ('openai', 'gemini'):

@@ -101,13 +101,13 @@ internal fun HudSurface(
         val widthPx = constraints.maxWidth.toFloat()
         val heightPx = constraints.maxHeight.toFloat()
         val compact = maxHeight < 360.dp
-        val menuWidth = (maxWidth * .68f).coerceAtMost(340.dp)
+        val menuWidth = (maxWidth * .74f).coerceAtMost(370.dp)
         val menuHeight = maxHeight * .78f
         // Glass3 official central-content / reflection guidance, with additional side optical margin.
-        val safeX = maxWidth * .18f
+        val safeX = maxWidth * .15f
         val safeTop = maxHeight * (if (compact) .13f else .22f)
         val safeBottom = maxHeight * (if (compact) .13f else .22f)
-        val insetPx = widthPx * .18f
+        val insetPx = widthPx * .15f
         val paddingPx = with(density) { 10.dp.toPx() }
         val panelWidth = (widthPx - insetPx * 2).coerceAtLeast(1f)
         // Keep font readable; paginate content instead of shrinking an eight-line phone card.

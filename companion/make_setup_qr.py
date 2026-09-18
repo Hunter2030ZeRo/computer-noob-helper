@@ -9,9 +9,11 @@ from pathlib import Path
 
 
 def payload(provider, model, key):
-    if provider not in ('openai', 'gemini'):
-        raise ValueError('Provider must be openai or gemini')
-    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,119}', model):
+    if provider not in ('openai', 'gemini', 'openrouter'):
+        raise ValueError('Provider must be openai, gemini or openrouter')
+    valid_model = (model == 'openrouter/free' or re.fullmatch(
+        r'[A-Za-z0-9][A-Za-z0-9_-]{0,59}/[A-Za-z0-9][A-Za-z0-9._-]{0,119}:free', model)) if provider == 'openrouter' else re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,119}', model)
+    if not valid_model:
         raise ValueError('Invalid model ID')
     if not 16 <= len(key) <= 512 or any(not 33 <= ord(c) <= 126 for c in key):
         raise ValueError('Invalid API key format')
@@ -42,8 +44,9 @@ p{max-width:640px;margin:16px auto;line-height:1.6}
 
 
 def main():
-    provider = input('Provider (openai / gemini): ').strip().lower()
-    model = input('이미지 입력을 지원하는 모델 ID: ').strip()
+    provider = input('Provider (openai / gemini / openrouter): ').strip().lower()
+    default_model = 'google/gemma-4-26b-a4b-it:free' if provider == 'openrouter' else ''
+    model = input('이미지 입력을 지원하는 모델 ID' + (f' [{default_model}]' if default_model else '') + ': ').strip() or default_model
     key = getpass.getpass('API 키 (화면에 표시되지 않음): ').strip()
     document = create_document(provider, model, key)
     path = Path('setup-qr.html')
